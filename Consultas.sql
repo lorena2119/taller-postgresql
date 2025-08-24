@@ -115,3 +115,102 @@
     FROM miscompras.compras as c
     JOIN miscompras.compras_productos as cp USING(id_compra)
     ORDER BY c.id_cliente, c.fecha DESC;
+
+-- 11. Devuelve los 2 productos más vendidos por categoría usando una subconsulta y luego filtrando `ROW_NUMBER` <= 2.
+    -- - `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY SUM(...) DESC)`
+    SELECT DISTINCT ON(c.id_cliente) c.id_cliente, cp.total as total_compra
+    FROM miscompras.compras as c
+    JOIN miscompras.compras_productos as cp USING(id_compra)
+    ORDER BY c.id_cliente, c.fecha DESC;
+
+-- 12. Calcula ventas mensuales: agrupa por mes truncando la fecha, cuenta compras distintas y suma ventas, ordenando cronológicamente.
+    -- - `DATE_TRUNC('month', fecha)`
+    -- - `COUNT(DISTINCT ...)`
+    -- - `SUM`
+    SELECT DATE_TRUNC('month', c.fecha) as mes, COUNT(DISTINCT c.id_compra) as compras_distintas, SUM(cp.total) as total_ventas
+    FROM miscompras.compras as c
+    JOIN miscompras.compras_productos as cp USING(id_compra)
+    GROUP BY mes
+    ORDER BY mes ASC;
+
+-- 13. Lista productos que nunca se han vendido mediante un anti-join, comparando por id_producto
+    -- - `NOT EXISTS`
+    SELECT p.id_producto, p.nombre
+    FROM miscompras.productos p
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM miscompras.compras_productos as cp
+        WHERE cp.id_producto = p.id_producto
+    );
+
+-- 14. Identifica clientes que, al comprar “café”, también compran “pan” en la misma compra, usando un filtro con `ILIKE` y una subconsulta correlacionada con `EXISTS`.
+    -- - `EXISTS`
+    -- - `ILIKE`
+    SELECT DISTINCT c.id, c.nombre, c.apellidos
+    FROM clientes c
+    JOIN miscompras.compras co ON c.id = co.id_cliente
+    WHERE EXISTS (
+        SELECT 1
+        FROM miscompras.compras_productos cp
+        JOIN miscompras.productos p1 ON cp.id_producto = p1.id_producto
+        WHERE cp.id_compra = co.id_compra
+        AND p1.nombre ILIKE '%café%'
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM miscompras.compras_productos cp
+        JOIN miscompras.productos p2 ON cp.id_producto = p2.id_producto
+        WHERE cp.id_compra = co.id_compra
+        AND p2.nombre ILIKE '%pan%'
+    );
+
+-- 15. Estima el margen porcentual “simulado” de un producto aplicando operadores aritméticos sobre precio_venta y formateo con `ROUND()` a un decimal.
+    -- - `ROUND`
+    -- Supuesto: costo_simulado = 65% del precio_venta
+    SELECT p.id_producto, p.nombre, p.precio_venta,
+    ROUND( ((p.precio_venta - (p.precio_venta * 0.65)) / NULLIF(p.precio_venta, 0)) * 100, 1 ) AS margen_simulado,
+    ROUND(p.precio_venta * 0.65, 2) AS costo_simulado
+    FROM miscompras.productos p;
+
+-- 16. Filtra clientes de un dominio dado usando expresiones regulares con el operador `~*` (case-insensitive) y limpieza con `TRIM()` sobre el correo electrónico.
+    -- - `TRIM`
+    -- - `~*`
+    SELECT id, nombre, apellidos, correo_electronico
+    FROM miscompras.clientes
+    WHERE TRIM(correo_electronico) ~* '@example\.com$';
+    
+-- 17. Normaliza nombres y apellidos de clientes con `TRIM()` e `INITCAP()` para capitalizar, retornando columnas formateadas.
+    -- - `TRIM`
+    -- - `INITCAP`
+    SELECT INITCAP(TRIM(nombre)) as nombre_cliente, INITCAP(TRIM(apellidos)) as apellidos
+    FROM miscompras.clientes;
+
+-- 18. Selecciona los productos cuyo `id_producto` es par usando el operador módulo `%` en la cláusula `WHERE`.
+    -- - `%`
+    SELECT id_producto, nombre
+    FROM miscompras.productos
+    WHERE id_producto % 2 = 0;
+
+-- 19. Crea una vista ventas_por_compra que consolide `id_compra`,` id_cliente`, `fecha` y el `SUM(total)` por compra, usando `CREATE OR REPLACE VIEW` y `JOIN ... USING`.
+    -- - `VIEW`
+    -- - `JOIN`
+    -- - `USING`
+    CREATE OR REPLACE VIEW miscompras.ventas_por_compra AS
+    SELECT c.id_compra, c.id_cliente, c.fecha, SUM(cp.total) AS total_compra
+    FROM miscompras.compras c
+    JOIN miscompras.compras_productos cp
+    USING (id_compra)
+    GROUP BY c.id_compra, c.id_cliente, c.fecha;
+    SELECT * FROM miscompras.ventas_por_compra;
+
+-- 20. Crea una vista materializada mensual mv_ventas_mensuales que agregue ventas por `DATE_TRUNC('month', fecha);` recuerda refrescarla con `REFRESH MATERIALIZED VIEW` cuando corresponda.
+    -- - `DATE_TRUNC()`
+    -- - `REFRESH MATERIALIZED VIEW`
+    CREATE MATERIALIZED VIEW miscompras.mv_ventas_mensuales AS
+    SELECT DATE_TRUNC('month', c.fecha) AS mes, SUM(cp.total) AS total_mensual
+    FROM miscompras.compras c
+    JOIN miscompras.compras_productos cp
+    USING (id_compra)
+    GROUP BY DATE_TRUNC('month', c.fecha)
+    ORDER BY mes;
+    SELECT * FROM miscompras.mv_ventas_mensuales;
