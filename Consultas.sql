@@ -214,3 +214,89 @@
     GROUP BY DATE_TRUNC('month', c.fecha)
     ORDER BY mes;
     SELECT * FROM miscompras.mv_ventas_mensuales;
+
+-- 21. Realiza un “UPSERT” de un producto referenciado por codigo_barras usando `INSERT ... ON CONFLICT (...) DO UPDATE`, actualizando nombre y precio_venta cuando exista conflicto.
+    -- - `UPSERT`
+    -- - `INSERT ... ON CONFLICT (...) DO UPDATE`
+    INSERT INTO miscompras.productos (codigo_barras, nombre, precio_venta, id_categoria)
+    VALUES ('7701234567890', 'Café Premium', 18500, 1)
+    ON CONFLICT (codigo_barras) 
+    DO UPDATE SET 
+    nombre = EXCLUDED.nombre,
+    precio_venta = EXCLUDED.precio_venta;
+
+-- 22. Recalcula el stock descontando lo vendido a partir de un `UPDATE ... FROM (SELECT ... GROUP BY ...)`, empleando `COALESCE()` y `GREATEST()` para evitar negativos.
+    -- - `GREATEST`
+    -- - `COALESCE`
+    UPDATE miscompras.productos p
+    SET cantidad_stock = GREATEST(0, p.cantidad_stock - COALESCE(v.total_vendido, 0))
+    FROM (
+        SELECT id_producto, SUM(cantidad) AS total_vendido
+        FROM miscompras.compras_productos
+        GROUP BY id_producto
+    ) v
+    WHERE p.id_producto = v.id_producto;
+
+-- 23. Implementa una función PL/pgSQL (`miscompras.fn_total_compra`) que reciba `p_id_compra` y retorne el `total` con `COALESCE(SUM(...), 0);` define el tipo de retorno `NUMERIC(16,2)`.
+    -- - `COALESCE`
+    -- - `SUM`
+    CREATE OR REPLACE FUNCTION miscompras.fn_total_compra(p_id_compra INT)
+    RETURNS NUMERIC LANGUAGE plpgsql AS $$
+    DECLARE v_total NUMERIC(16, 2);
+    BEGIN
+        SELECT COALESCE(SUM(total), 0)
+        INTO v_total
+        FROM miscompras.compras_productos
+        WHERE id_compra = p_id_compra;
+
+        RETURN v_total;
+    END
+    $$;
+    SELECT miscompras.fn_total_compra(1) as total_compra;
+
+-- 24. Define un trigger `AFTER INSERT` sobre `compras_productos` que descuente stock mediante una función `RETURNS TRIGGER` y el uso del registro `NEW`, protegiendo con `GREATEST()` para no quedar bajo cero.
+    -- - `GREATEST()`
+    -- - `NEW`
+    CREATE OR REPLACE FUNCTION miscompras.trg_descuenta_stock()
+    RETURNS TRIGGER LANGUAGE plpgsql AS
+    $$
+    BEGIN
+        UPDATE miscompras.productos
+        SET cantidad_stock = GREATEST(0, cantidad_stock - NEW.cantidad)
+        WHERE id_producto = NEW.id_producto;
+        RETURN NEW;
+    END;
+    $$;
+    DROP TRIGGER IF EXISTS compras_productos_descuento_stock ON miscompras.compras_productos;
+    CREATE TRIGGER compras_productos_descuento_stock
+    AFTER INSERT ON miscompras.compras_productos
+    FOR EACH ROW EXECUTE FUNCTION miscompras.trg_descuenta_stock();
+
+-- 25. Asigna la “posición por precio” de cada producto dentro de su categoría con `DENSE_RANK() OVER (PARTITION BY ... ORDER BY precio_venta DESC)` y presenta el ranking.
+    -- - `DENSE_RANK()`
+    -- - `OVER (PARTITION BY ... ORDER BY precio_venta DESC)`
+    SELECT p.id_producto, p.nombre, p.precio_venta, p.id_categoria,
+    DENSE_RANK() OVER (
+        PARTITION BY p.id_categoria 
+        ORDER BY p.precio_venta DESC
+    ) AS posicion_por_precio
+    FROM miscompras.productos p
+    ORDER BY p.id_categoria, posicion_por_precio;
+
+-- 26. Para cada cliente, muestra su gasto por compra, el gasto anterior y el delta entre compras usando `LAG(...) OVER (PARTITION BY id_cliente ORDER BY dia)` dentro de un `CTE` que agrega por día.
+    -- - `LAG(...) OVER (PARTITION BY id_cliente ORDER BY dia)`
+    WITH compras_diarias AS (
+    SELECT c.id_cliente, DATE(c.fecha) AS dia, SUM(cp.total) AS gasto_diario
+    FROM miscompras.compras c
+    JOIN miscompras.compras_productos cp
+    USING (id_compra)
+    GROUP BY c.id_cliente, DATE(c.fecha)
+    )
+    SELECT id_cliente, dia, gasto_diario, LAG(gasto_diario) OVER (PARTITION BY id_cliente ORDER BY dia) AS gasto_anterior,
+        gasto_diario - COALESCE(
+            LAG(gasto_diario) OVER (PARTITION BY id_cliente ORDER BY dia), 
+            0
+        ) AS delta
+    FROM compras_diarias
+    ORDER BY id_cliente, dia;
+

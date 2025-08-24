@@ -84,3 +84,6 @@ CREATE TABLE miscompras.compras_productos (
 -- Indice adicional para acelerar consultas por producto
 CREATE INDEX IF NOT EXISTS idx_cp_id_producto
     ON miscompras.compras_productos (id_producto);
+
+ALTER TABLE miscompras.productos
+ADD CONSTRAINT uq_codigo_barras UNIQUE (codigo_barras);
